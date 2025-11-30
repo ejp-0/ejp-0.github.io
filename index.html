@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Memory Flip — 9 Pairs</title>
+  <style>
+    :root{
+      --gap:12px;
+      --card-size:160px; /* desktop default; overridden by media queries */
+      --bg:#f5f7fb;
+      --card-radius:12px;
+      --ui-pad:10px;
+    }
+
+    /* Grid */
+    #grid{display:grid;gap:var(--gap);justify-content:center;align-items:center;margin-top:12px}
+
+    /* Desktop / wide screens */
+    @media (min-width: 721px) {
+      :root{--card-size:180px}
+      #grid{grid-template-columns:repeat(6,var(--card-size));}
+    }
+
+    /* Mobile portrait -> 3 columns */
+    @media (max-width:720px) and (orientation:portrait) {
+      :root{--card-size:min(28vw,120px)}
+      #grid{grid-template-columns:repeat(3,var(--card-size));}
+    }
+
+    /* Mobile landscape -> 6 columns, size by viewport height */
+    @media (max-width:720px) and (orientation:landscape) {
+      :root{--card-size:min(18vh,170px)}
+      #grid{grid-template-columns:repeat(6,var(--card-size));}
+    }
+
+    /* Base UI */
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, Arial, sans-serif;background:var(--bg);color:#0f172a}
+    .wrap{max-width:1100px;margin:10px auto;padding:12px}
+    .header{display:flex;gap:12px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+    .box{background:#fff;padding:10px;border-radius:10px;box-shadow:0 6px 18px rgba(15,23,42,.06)}
+    h1{font-size:18px;margin:0}
+    .controls{display:flex;gap:10px;align-items:center}
+    input[type=text]{padding:8px;border-radius:8px;border:1px solid #e6eef9;min-width:180px}
+    button{padding:8px 12px;border-radius:8px;border:none;background:#2563eb;color:#fff;cursor:pointer}
+    button.secondary{background:#e2e8f0;color:#0f172a}
+    .status{display:flex;gap:12px;align-items:center;margin-left:8px}
+    .small{font-size:13px;color:#475569}
+
+    /* Cards */
+    .card{width:var(--card-size);height:var(--card-size);position:relative;perspective:900px;border-radius:var(--card-radius);cursor:pointer}
+    .inner{position:absolute;inset:0;border-radius:var(--card-radius);transition:transform .42s;transform-style:preserve-3d}
+    .card.flipped .inner{transform:rotateY(180deg)}
+    .face{position:absolute;inset:0;border-radius:var(--card-radius);backface-visibility:hidden;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .front{background:linear-gradient(180deg,#2563eb,#1e40af);color:#fff;font-weight:700;font-size:20px;user-select:none}
+    .back{transform:rotateY(180deg);background:#fff;border:1px solid #e6eef9}
+    .back img{width:100%;height:100%;object-fit:contain;display:block}
+    .matched .inner{box-shadow:0 0 0 4px rgba(34,197,94,.08) inset}
+
+    /* Responsive tweaks */
+    @media (max-width:720px){
+      .wrap{padding:8px}
+      input[type=text]{min-width:120px}
+      .header{flex-direction:column;align-items:stretch;gap:8px}
+      .controls{justify-content:space-between}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <h1>Memory Flip — 9 Pairs</h1>
+        <div class="small">Mode: portrait=3×6 | landscape=6×3 | desktop=6×3</div>
+      </div>
+
+      <div style="flex:1"></div>
+
+      <div class="box controls">
+        <label style="display:flex;flex-direction:column">
+          <span class="small">Player name</span>
+          <input id="playerName" type="text" placeholder="Enter player name" />
+        </label>
+
+        <div class="status small">
+          <div>Time: <strong id="timer">00:00.00</strong></div>
+          <div>Moves: <strong id="moves">0</strong></div>
+          <div>Matches: <strong id="matched">0/9</strong></div>
+        </div>
+
+        <button id="startBtn">Start / Reset</button>
+        
+      </div>
+    </div>
+
+    <div id="grid" class="box" aria-live="polite" role="application"></div>
+  </div>
+
+  <script>
+  // ---------- CONFIG ----------
+  // Google Form endpoint + entry IDs from your pre-filled URL:
+  const GOOGLE_FORM_ACTION = "https://docs.google.com/forms/d/e/1FAIpQLSf70s2ML3sI0mtTbsz0OQA-_e1eJk2PWpFSQ-funrC6xXd1tA/formResponse";
+  const ENTRY_NAME = "entry.292406874";      // Player Name
+  const ENTRY_TIME = "entry.1369978042";     // Completion Time
+  // Optional: if you add a Moves field in your form later, set its entry ID here:
+  const ENTRY_MOVES = "";                    // e.g. "entry.123456789"
+  // ----------------------------
+
+  const NUM_PAIRS = 9;
+  const grid = document.getElementById('grid');
+  const timerEl = document.getElementById('timer');
+  const movesEl = document.getElementById('moves');
+  const matchedEl = document.getElementById('matched');
+  const startBtn = document.getElementById('startBtn');
+  const playerNameInput = document.getElementById('playerName');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  // Images for each pair (adjust paths as needed)
+  const PRELOADED_IMAGES = [
+    "images/1.png",
+    "images/2.jpg",
+    "images/3.jpg",
+    "images/4.jpg",
+    "images/5.jpg",
+    "images/6.jpg",
+    "images/7.jpg",
+    "images/8.jpg",
+    "images/9.jpg"
+  ];
+
+  let first = null, second = null;
+  let lock = false;
+  let matches = 0, moves = 0;
+  let startTime = null, timerInterval = null;
+  let imagesForPairs = [];
+
+  function buildDeck() {
+    const deck = [];
+    for (let i = 0; i < NUM_PAIRS; i++) { deck.push({pair:i}); deck.push({pair:i}); }
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  }
+
+  function formatTime(ms) {
+    const s = Math.floor(ms/1000);
+    const mm = Math.floor(s/60);
+    const ss = s % 60;
+    const cs = Math.floor((ms % 1000) / 10);
+    return String(mm).padStart(2,'0') + ":" + String(ss).padStart(2,'0') + "." + String(cs).padStart(2,'0');
+  }
+
+  function startTimer() {
+    startTime = performance.now();
+    timerInterval = setInterval(()=> {
+      timerEl.textContent = formatTime(performance.now() - startTime);
+    }, 50);
+  }
+  function stopTimer() {
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  }
+
+  function renderBoard(deck) {
+    grid.innerHTML = '';
+    deck.forEach((cardData, idx) => {
+      const c = document.createElement('div');
+      c.className = 'card';
+      c.dataset.index = idx;
+      c.dataset.pair = cardData.pair;
+      c.setAttribute('role','button');
+      c.setAttribute('tabindex','0');
+
+      const inner = document.createElement('div'); inner.className = 'inner';
+      const front = document.createElement('div'); front.className = 'face front'; front.textContent = '?';
+      const back = document.createElement('div'); back.className = 'face back';
+
+      const imgSrc = imagesForPairs[cardData.pair];
+      if (imgSrc) {
+        const img = document.createElement('img'); img.src = imgSrc; img.alt = 'card '+(cardData.pair+1);
+        img.loading = 'eager';
+        back.appendChild(img);
+      } else {
+        back.innerHTML = '<div style="font-size:48px">❓</div>';
+      }
+
+      inner.appendChild(front); inner.appendChild(back);
+      c.appendChild(inner);
+
+      c.addEventListener('click', ()=> onCardClick(c));
+      c.addEventListener('keydown', (e)=> {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCardClick(c); }
+      });
+
+      grid.appendChild(c);
+    });
+  }
+
+  function onCardClick(card) {
+    if (lock) return;
+    if (card.classList.contains('matched') || card.classList.contains('flipped')) return;
+    if (!startTime) startTimer();
+
+    card.classList.add('flipped');
+    if (!first) { first = card; return; }
+    second = card;
+    moves++; movesEl.textContent = moves;
+
+    if (first.dataset.pair === second.dataset.pair) {
+      first.classList.add('matched');
+      second.classList.add('matched');
+      matches++; matchedEl.textContent = matches + '/' + NUM_PAIRS;
+      first = null; second = null;
+
+      if (matches === NUM_PAIRS) {
+        stopTimer();
+        const totalMs = performance.now() - startTime;
+        const timeStr = formatTime(totalMs);
+        setTimeout(()=> {
+          alert('Well done, ' + (playerNameInput.value || 'Player') + '! Time: ' + timeStr + ' | Moves: ' + moves);
+          submitResult(playerNameInput.value || 'Player', timeStr, moves);
+        }, 220);
+      }
+      return;
+    }
+
+    // not a match
+    lock = true;
+    setTimeout(()=> {
+      first.classList.remove('flipped');
+      second.classList.remove('flipped');
+      first = null; second = null; lock = false;
+    }, 700);
+  }
+
+  function startGame() {
+    imagesForPairs = PRELOADED_IMAGES.slice(0, NUM_PAIRS);
+
+    // reset stats
+    matches = 0; moves = 0; first = null; second = null; lock = false; startTime = null;
+    stopTimer();
+    timerEl.textContent = '00:00.00';
+    movesEl.textContent = '0';
+    matchedEl.textContent = '0/' + NUM_PAIRS;
+
+    const deck = buildDeck();
+    renderBoard(deck);
+  }
+
+  startBtn.addEventListener('click', startGame);
+  startGame();
+
+  // Download full single-file snapshot (images remain as URLs)
+  downloadBtn.addEventListener('click', ()=> {
+    const html = '<!doctype html>\n' + document.documentElement.outerHTML;
+    const blob = new Blob([html], {type:'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'memory-game.html';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  });
+
+  // Send results to Google Form (best-effort)
+  function submitResult(name, timeStr, movesCount) {
+    if (!GOOGLE_FORM_ACTION) return;
+    const data = new URLSearchParams();
+    if (ENTRY_NAME)  data.append(ENTRY_NAME, name);
+    if (ENTRY_TIME)  data.append(ENTRY_TIME, timeStr);
+    if (ENTRY_MOVES) data.append(ENTRY_MOVES, String(movesCount));
+
+    // Use no-cors so fetch doesn't error; Google Forms will accept the submission
+    fetch(GOOGLE_FORM_ACTION, { method: 'POST', body: data, mode: 'no-cors' })
+      .catch(()=>{ /* ignore network errors in no-cors mode */ });
+  }
+  </script>
+</body>
+</html>
